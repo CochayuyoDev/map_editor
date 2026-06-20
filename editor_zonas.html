@@ -82,11 +82,15 @@
           <input type="number" id="clashMargin" value="0" min="0" max="2000" step="10" style="width:64px"> m</label>
         <button class="sec" id="btnResolveClash">⚖️ Resolver choques</button>
       </div>
+      <div class="row" style="margin-top:6px">
+        <button class="sec" id="btnTrimExpensive">✂️ Recortar general (cara manda)</button>
+      </div>
       <div class="hint" style="margin-top:8px">
         <b>Clic</b> en una zona = seleccionar · <b>Shift+clic</b> = varias.<br>
         <b>Restar de abajo</b>: la zona seleccionada (encima) recorta a las que tiene debajo donde se solapan.<br>
         <b>Unir</b>: fusiona 2+ zonas seleccionadas en una.<br>
-        <b>Resolver choques</b>: la zona <b>más barata crece</b> el <b>margen</b> (en metros) hacia la zona más cara y queda encima, así su tarifa manda en esa franja. La zona cara <b>NO se recorta</b>: queda intacta debajo.
+        <b>Resolver choques</b>: la zona <b>más barata crece</b> el <b>margen</b> (en metros) hacia la zona más cara y queda encima, así su tarifa manda en esa franja. La zona cara <b>NO se recorta</b>: queda intacta debajo.<br>
+        <b>Recortar general (cara manda)</b>: en TODO el mapa, donde dos zonas se encimen se <b>recorta la más barata</b> y queda solo la <b>más cara</b>. Lo inverso a Resolver choques.
       </div>
     </div>
 
@@ -743,6 +747,49 @@ document.getElementById("btnResolveClash").onclick=()=>{
   if(margin<=0){ alert("Listo: las zonas baratas quedaron al frente (su tarifa manda donde se solapan). Pon un margen en metros si quieres que además crezcan hacia la zona más cara."); return; }
   if(!changed){ alert("No hay zonas baratas pegadas a una más cara dentro de ese margen."); return; }
   alert("Listo: "+changed+" zona(s) barata(s) crecieron "+margin+" m hacia las más caras. Las zonas caras NO se recortaron.");
+};
+
+// Recortar general (cara manda): en todo el mapa, donde dos zonas se encimen,
+// se RECORTA la más barata y queda solo la más cara. Inverso a "Resolver choques".
+document.getElementById("btnTrimExpensive").onclick=()=>{
+  // snapshot: geometría Turf + tarifa numérica de cada zona
+  const items=getZones().map(l=>{
+    let t=null; try{ t=layerToTurf(l); }catch(e){}
+    return {layer:l, props:l.feature.properties, tar:tarifaNum(l.feature.properties), turf:t};
+  }).filter(x=>x.turf);
+  if(items.length<2){ alert("Necesitas al menos 2 zonas para recortar."); return; }
+
+  let changed=0, gone=0;
+  // a cada zona se le resta la unión de TODAS las zonas más caras que la tocan
+  for(const z of items){
+    let exp=null;   // unión de las zonas MÁS CARAS pegadas a z
+    for(const o of items){
+      if(o===z || !(o.tar > z.tar)) continue;        // solo las estrictamente más caras
+      if(!turf.booleanIntersects(o.turf, z.turf)) continue;
+      if(!exp) exp=o.turf;
+      else{ try{ exp=turf.union(turf.featureCollection([exp,o.turf])); }
+            catch(e){ try{ exp=turf.union(exp,o.turf); }catch(e2){} } }
+    }
+    if(!exp) continue;                                // nada más caro encima -> no se recorta
+    let diff;
+    try{ diff=turf.difference(turf.featureCollection([z.turf, exp])); }
+    catch(e){ try{ diff=turf.difference(z.turf, exp); }catch(e2){ continue; } }
+    z.newTurf=diff; z.willTrim=true; changed++;        // diff=null si la barata queda totalmente cubierta
+  }
+  for(const z of items){
+    if(!z.willTrim) continue;
+    map.removeLayer(z.layer);
+    if(z.newTurf) addFeature(z.newTurf, z.props);      // si es null, la barata desaparece (quedó cubierta)
+    else gone++;
+  }
+  // la cara al frente para que mande visualmente en cualquier resto
+  getZones().slice()
+    .sort((a,b)=>tarifaNum(a.feature.properties)-tarifaNum(b.feature.properties))
+    .forEach(l=>l.bringToFront());
+  clearSelection(); updateCount(); pushHistory();
+  if(!changed){ alert("No hay zonas baratas solapadas por una más cara."); return; }
+  alert("Listo: "+changed+" zona(s) barata(s) recortadas (queda la más cara)."+
+        (gone? " "+gone+" quedaron totalmente cubiertas y se eliminaron.":""));
 };
 
 // ---------- Deshacer / Rehacer: botones + teclado ----------
