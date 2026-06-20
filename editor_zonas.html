@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Editor de Zonas de Cobertura - GSG Corp</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css"/>
+<style>
+  html,body{margin:0;height:100%;font-family:system-ui,Segoe UI,Arial,sans-serif}
+  #app{display:flex;height:100%}
+  #map{flex:1}
+  #side{width:300px;background:#1f2430;color:#e6e6e6;padding:14px;overflow-y:auto;box-sizing:border-box}
+  #side h1{font-size:16px;margin:0 0 4px}
+  #side .sub{font-size:11px;color:#9aa4b2;margin-bottom:14px}
+  .blk{background:#2a3040;border-radius:8px;padding:10px;margin-bottom:12px}
+  .blk h2{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#9aa4b2;margin:0 0 8px}
+  button,select,input{font-size:13px}
+  button{background:#3d7eff;color:#fff;border:0;border-radius:6px;padding:8px 10px;cursor:pointer;width:100%;margin-bottom:6px}
+  button.sec{background:#444c5e}
+  button.active{background:#7CFC9A;color:#13301d;font-weight:bold;box-shadow:0 0 0 2px #4caf50 inset}
+  button:hover{filter:brightness(1.1)}
+  select,input[type=text]{width:100%;padding:7px;border-radius:6px;border:1px solid #444c5e;background:#1f2430;color:#fff;box-sizing:border-box;margin-bottom:6px}
+  .tarifa-item{display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:4px}
+  .sw{width:14px;height:14px;border-radius:3px;border:1px solid #000}
+  .hint{font-size:11px;color:#9aa4b2;line-height:1.4}
+  #count{font-size:12px;color:#7CFC9A}
+  .row{display:flex;gap:6px}
+  .row button{margin-bottom:0}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>🗺️ Editor de Zonas</h1>
+    <div class="sub">Cobertura GSG Corp · diseña rápido y exporta a KMZ</div>
+
+    <div class="blk">
+      <h2>1 · Cargar mapa actual</h2>
+      <input type="file" id="fileKmz" accept=".kmz,.kml" style="margin-bottom:6px">
+      <div class="hint">Abre tu KMZ/KML exportado de My Maps para editar las zonas que ya tienes.</div>
+    </div>
+
+    <div class="blk">
+      <h2>2 · Tarifa activa</h2>
+      <select id="tarifa"></select>
+      <div class="hint">Las zonas nuevas que dibujes tomarán esta tarifa y color. Para cambiar una zona: haz clic en ella y elige otra tarifa.</div>
+    </div>
+
+    <div class="blk">
+      <h2>3 · Dibujar / seleccionar</h2>
+      <button class="sec active" id="btnSelect">🖱️ Modo selección (Esc)</button>
+      <button id="btnDraw">✏️ Dibujar zona nueva</button>
+      <div class="row">
+        <button class="sec" id="btnEdit">Editar vértices</button>
+        <button class="sec" id="btnDrag">Mover</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="sec" id="btnCut">✂️ Recortar</button>
+        <button class="sec" id="btnDel">🗑️ Borrar</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="sec" id="btnUndo">↶ Deshacer</button>
+        <button class="sec" id="btnRedo">↷ Rehacer</button>
+      </div>
+      <div class="hint" style="margin-top:8px">El <b>snapping</b> está activo: los vértices se pegan a otras zonas para no dejar huecos. Con <b>✂️ Recortar</b> dibujas la forma a quitar y se resta de las zonas que toca (se puede deshacer con Ctrl+Z).<br><b>Ctrl+Z</b> deshace · <b>Ctrl+Y</b> rehace.</div>
+    </div>
+
+    <div class="blk">
+      <h2>Capas y superposición</h2>
+      <div id="selinfo" class="hint" style="margin-bottom:8px">Nada seleccionado</div>
+      <div class="row">
+        <button class="sec" id="btnFront">⬆️ Al frente</button>
+        <button class="sec" id="btnBack">⬇️ Al fondo</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="sec" id="btnSubtract">➖ Restar de abajo</button>
+        <button class="sec" id="btnUnion">🔗 Unir</button>
+      </div>
+      <div class="row" style="margin-top:6px;align-items:center">
+        <label class="hint" style="display:flex;align-items:center;gap:4px;margin:0">Margen:
+          <input type="number" id="clashMargin" value="0" min="0" max="2000" step="10" style="width:64px"> m</label>
+        <button class="sec" id="btnResolveClash">⚖️ Resolver choques</button>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        <b>Clic</b> en una zona = seleccionar · <b>Shift+clic</b> = varias.<br>
+        <b>Restar de abajo</b>: la zona seleccionada (encima) recorta a las que tiene debajo donde se solapan.<br>
+        <b>Unir</b>: fusiona 2+ zonas seleccionadas en una.<br>
+        <b>Resolver choques</b>: la zona <b>más barata crece</b> el <b>margen</b> (en metros) hacia la zona más cara y queda encima, así su tarifa manda en esa franja. La zona cara <b>NO se recorta</b>: queda intacta debajo.
+      </div>
+    </div>
+
+    <div class="blk">
+      <h2>4 · Traer límite de distrito</h2>
+      <input type="text" id="distrito" placeholder="Ej: Villa María del Triunfo">
+      <button class="sec" id="btnDistrito">📐 Cargar contorno</button>
+      <div class="hint">Trae la forma exacta del distrito ya hecha. Luego recórtala o edítala en vez de calcarla punto por punto.</div>
+    </div>
+
+    <div class="blk">
+      <h2>🛣️ Calles (pegar bordes)</h2>
+      <select id="streetType">
+        <option value="all">Todas las calles</option>
+        <option value="main">Solo avenidas principales</option>
+      </select>
+      <button class="sec" id="btnStreets">🛣️ Cargar calles aquí</button>
+      <button class="sec" id="btnStreetsToggle">👁️ Mostrar / ocultar</button>
+      <div class="hint">Acércate (zoom) a la zona y carga las calles. Al <b>dibujar</b> o <b>✂️ recortar</b>, los vértices se <b>pegan a las calles</b> para que el borde siga las pistas (ej. el límite con el cerro) y no queden cuadrados gigantes.</div>
+    </div>
+
+    <div class="blk">
+      <h2>5 · Exportar / Guardar</h2>
+      <button id="btnExport">💾 Descargar KMZ</button>
+      <button class="sec" id="btnExportGeo">Descargar GeoJSON</button>
+      <button class="sec" id="btnRecover">♻️ Recuperar último trabajo</button>
+      <div id="count">0 zonas en el mapa</div>
+      <div id="savestatus" class="hint" style="margin-top:4px;color:#7CFC9A">Se guarda solo en tu navegador</div>
+    </div>
+
+    <div class="blk">
+      <h2>Tarifas</h2>
+      <div id="leyenda"></div>
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
+<script>
+// ---------- Config de tarifas (EDITABLE; color HEX -> se traduce a KML al exportar) ----------
+// Colores REALES de la paleta de Google My Maps (así no se "ajustan" al re-importar)
+const MYMAPS_PALETTE = [
+  "#000000","#A52714","#E65100","#FF5252","#FB8C00","#FBC02D","#FFD600","#FFEA00",
+  "#558B2F","#7CB342","#0B8043","#0097A7","#0288D1","#3949AB","#7B1FA2","#C2185B",
+  "#795548","#757575","#FFFFFF"
+];
+const TARIFAS_DEFAULT = {
+  "10": {label:"Tarifa plana 10 soles", hex:"#558B2F"}, // verde My Maps
+  "15": {label:"Tarifa plana 15 soles", hex:"#FFD600"}, // amarillo My Maps
+  "20": {label:"Tarifa plana 20 soles", hex:"#A52714"}, // rojo oscuro My Maps
+  "25": {label:"Tarifa plana 25 soles", hex:"#E65100"}, // naranja My Maps
+  "30": {label:"Tarifa plana 30 soles", hex:"#FF5252"}, // rojo My Maps
+};
+// colores por defecto viejos (no compatibles con My Maps) -> se migran a la paleta nueva
+const OLD_DEFAULT_HEX = {"#2ecc40":"#558B2F","#ffdc00":"#FFD600","#ff851b":"#E65100","#0074d9":"#A52714","#ff4136":"#FF5252","#888888":"#FBC02D"};
+function loadTarifas(){
+  try{
+    const s=localStorage.getItem("tarifas_config");
+    if(s){ const o=JSON.parse(s);
+      if(o && Object.keys(o).length){
+        for(const k in o){ const h=(o[k].hex||"").toLowerCase(); if(OLD_DEFAULT_HEX[h]) o[k].hex=OLD_DEFAULT_HEX[h]; }
+        return o;
+      }
+    }
+  }catch(e){}
+  return JSON.parse(JSON.stringify(TARIFAS_DEFAULT));
+}
+let TARIFAS = loadTarifas();
+function saveTarifas(){ try{ localStorage.setItem("tarifas_config", JSON.stringify(TARIFAS)); }catch(e){} }
+
+// ---------- Mapa ----------
+const map = L.map("map").setView([-12.05, -77.0], 11);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {maxZoom:19, attribution:"© OpenStreetMap"}).addTo(map);
+
+// snapping global activado
+map.pm.setGlobalOptions({snappable:true, snapDistance:20, continueDrawing:false});
+
+// ---------- UI: dropdown y leyenda ----------
+const selTarifa = document.getElementById("tarifa");
+const leyenda = document.getElementById("leyenda");
+
+// color efectivo de una zona: su color propio si lo tiene, si no el de su tarifa
+function colorOf(props){
+  if(props && props.color) return props.color;
+  const t=props && props.tarifa;
+  return (TARIFAS[t] && TARIFAS[t].hex) || "#3388ff";
+}
+function styleFromProps(props){ const c=colorOf(props); return {color:c, weight:2, fillColor:c, fillOpacity:.35}; }
+function styleFor(t){ const c=(TARIFAS[t]&&TARIFAS[t].hex)||"#3388ff"; return {color:c, weight:2, fillColor:c, fillOpacity:.35}; }
+
+function activeTarifa(){ return selTarifa.value; }
+
+// rellena el desplegable de "tarifa activa"
+function renderTarifaSelect(){
+  const prev=selTarifa.value;
+  selTarifa.innerHTML="";
+  for(const [k,v] of Object.entries(TARIFAS)){
+    const o=document.createElement("option"); o.value=k; o.textContent=v.label; selTarifa.appendChild(o);
+  }
+  if(TARIFAS[prev]) selTarifa.value=prev;
+  else if(TARIFAS["15"]) selTarifa.value="15";
+}
+
+// tira de colores de la paleta de Google My Maps (clic = elegir)
+function paletteStrip(onPick, current){
+  const wrap=document.createElement("div");
+  wrap.style.cssText="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px";
+  for(const c of MYMAPS_PALETTE){
+    const b=document.createElement("button"); b.type="button"; b.title=c;
+    const sel = current && current.toLowerCase()===c.toLowerCase();
+    b.style.cssText=`width:17px;height:17px;padding:0;margin:0;border-radius:3px;cursor:pointer;background:${c};`
+      +`border:${sel?"2px solid #fff":"1px solid #00000055"};box-shadow:${sel?"0 0 0 1px #4caf50":"none"}`;
+    b.onclick=()=>onPick(c);
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+
+// editor de tarifas: cambiar color y nombre, agregar y borrar
+function renderTarifaEditor(){
+  leyenda.innerHTML="";
+  for(const [k,v] of Object.entries(TARIFAS)){
+    const box=document.createElement("div");
+    box.style.cssText="margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid #3a4252";
+    const row=document.createElement("div"); row.className="tarifa-item";
+    row.innerHTML=
+      `<input type="color" value="${v.hex}" title="Color libre (puede ajustarse en My Maps)" style="width:30px;height:26px;padding:0;border:none;background:none;cursor:pointer">`+
+      `<input type="text" value="${(v.label||"").replace(/"/g,'&quot;')}" style="flex:1;margin:0" title="Nombre de la tarifa">`+
+      `<button class="sec" title="Borrar tarifa" style="width:auto;margin:0;padding:5px 9px">✕</button>`;
+    const [color,label,del]=row.children;
+    color.oninput=()=>{ TARIFAS[k].hex=color.value; onTarifaColorChange(k); };   // libre (sin re-render)
+    label.onchange=()=>{ TARIFAS[k].label=label.value; saveTarifas(); renderTarifaSelect(); };
+    del.onclick=()=>{
+      if(Object.keys(TARIFAS).length<=1){ alert("Debe quedar al menos una tarifa."); return; }
+      if(!confirm("¿Borrar la tarifa «"+v.label+"»? Las zonas que la usan conservarán su color.")) return;
+      delete TARIFAS[k]; saveTarifas(); renderTarifas();
+    };
+    box.appendChild(row);
+    box.appendChild(paletteStrip(c=>{ TARIFAS[k].hex=c; onTarifaColorChange(k); renderTarifaEditor(); }, v.hex));
+    leyenda.appendChild(box);
+  }
+  const add=document.createElement("button"); add.className="sec"; add.textContent="➕ Agregar tarifa"; add.style.marginTop="6px";
+  add.onclick=()=>{
+    const key=prompt("Valor de la nueva tarifa (ej. 35):"); if(!key) return;
+    const k=key.trim();
+    if(TARIFAS[k]){ alert("Ya existe esa tarifa."); return; }
+    TARIFAS[k]={label:"Tarifa plana "+k+" soles", hex:"#FBC02D"};
+    saveTarifas(); renderTarifas();
+  };
+  leyenda.appendChild(add);
+  const tip=document.createElement("div"); tip.className="hint"; tip.style.marginTop="6px";
+  tip.innerHTML="Usa los cuadritos de color: son la <b>paleta de Google My Maps</b>, así el color se ve igual al re-subir el KMZ. El selector libre permite cualquier color, pero My Maps puede ajustarlo al más parecido.";
+  leyenda.appendChild(tip);
+}
+
+function renderTarifas(){ renderTarifaSelect(); renderTarifaEditor(); }
+
+// al cambiar el color de una tarifa, las zonas ligadas a ella (sin color propio personalizado) lo adoptan
+function onTarifaColorChange(k){
+  saveTarifas();
+  for(const l of getZones()){
+    const p=l.feature.properties;
+    if(p.tarifa===k && !p.customColor){ p.color=TARIFAS[k].hex; l.setStyle(styleFromProps(p)); }
+  }
+  renderTarifaSelect();
+}
+
+renderTarifas();
+
+// aplica estilo + guarda la tarifa en el layer (toma el color de la tarifa)
+function setTarifa(layer, t){
+  layer.feature = layer.feature || {type:"Feature", properties:{}};
+  const p=layer.feature.properties;
+  p.tarifa = t;
+  p.name = p.name || ("Zona "+t);
+  p.color = (TARIFAS[t]&&TARIFAS[t].hex) || p.color || "#3388ff";
+  p.customColor = false;   // sigue el color de su tarifa
+  layer.setStyle(styleFromProps(p));
+  bindPopup(layer);
+}
+
+function bindPopup(layer){
+  const p=layer.feature.properties;
+  const html=`<b>${p.name||"(sin nombre)"}</b><br>Tarifa: ${p.tarifa} soles<br>
+    <label style="font-size:11px">Nombre:<br><input id="pn" value="${(p.name||"").replace(/"/g,'&quot;')}" style="width:160px"></label><br>
+    <label style="font-size:11px;display:inline-flex;align-items:center;gap:6px;margin-top:4px">Color de esta zona:
+      <input type="color" id="pc" value="${colorOf(p)}" style="width:34px;height:24px;padding:0;border:none;background:none;cursor:pointer"></label>
+    <div id="pp" style="max-width:170px"></div>`;
+  layer.bindPopup(html);
+  layer.off("popupopen").on("popupopen",()=>{
+    const inp=document.getElementById("pn");
+    if(inp) inp.onchange=()=>{ p.name=inp.value; };
+    const setColor=hex=>{ p.color=hex; p.customColor=true; layer.setStyle(styleFromProps(p)); const c=document.getElementById("pc"); if(c) c.value=hex; pushHistory(); };
+    const col=document.getElementById("pc");
+    if(col) col.oninput=()=>setColor(col.value);
+    const pp=document.getElementById("pp");
+    if(pp) pp.appendChild(paletteStrip(setColor, colorOf(p)));
+  });
+}
+
+// ---------- Historial (Deshacer / Rehacer) ----------
+let history=[], future=[], restoring=false;
+function serializeState(){
+  return getZones().map(l=>({
+    coords: l.getLatLngs().map(ring=>ring.map(p=>[p.lat,p.lng])), // todos los anillos (con huecos)
+    props: {...l.feature.properties}
+  }));
+}
+function pushHistory(skipSave){
+  if(restoring) return;
+  history.push(JSON.stringify(serializeState()));
+  if(history.length>120) history.shift();   // límite del historial
+  future=[];                                // un cambio nuevo invalida el "rehacer"
+  if(!skipSave) autosave();
+}
+function autosave(){
+  try{
+    localStorage.setItem("zonas_autosave", JSON.stringify(serializeState()));
+    localStorage.setItem("zonas_autosave_ts", new Date().toLocaleString());
+    const el=document.getElementById("savestatus");
+    if(el) el.textContent="✔ Guardado auto: "+new Date().toLocaleTimeString();
+  }catch(e){}
+}
+function exitModes(){               // siempre se puede volver a clicar/seleccionar
+  try{ disableAllModes(); }catch(e){}
+  cutPending=false; currentMode=null;
+  try{ updateModeButtons(); }catch(e){}
+}
+function restoreState(stateStr){
+  restoring=true;
+  try{
+    const data=JSON.parse(stateStr);
+    selected=[];                            // las referencias viejas dejan de existir
+    getZones().forEach(l=> map.removeLayer(l));
+    for(const z of data){
+      const layer=L.polygon(z.coords, styleFromProps(z.props)).addTo(map);
+      layer.feature={type:"Feature",properties:z.props};
+      bindPopup(layer); makeInteractive(layer);
+    }
+  }catch(err){
+    console.error("restoreState falló:",err);
+    alert("No se pudo restaurar ese paso; se mantiene lo que tienes ahora.");
+  }
+  restoring=false;
+  exitModes();                              // clave: salir de cualquier modo tras deshacer
+  updateCount(); updateSelInfo();
+}
+function undo(){
+  if(history.length<=1){ exitModes(); return; }   // history[0] es el estado vacío inicial
+  future.push(history.pop());
+  restoreState(history[history.length-1]);
+  autosave();
+}
+function redo(){
+  if(!future.length){ exitModes(); return; }
+  const s=future.pop(); history.push(s); restoreState(s);
+  autosave();
+}
+
+// al crear una zona nueva
+map.on("pm:create", e=>{
+  if(cutPending){
+    // la forma dibujada es un molde: resta de todas las zonas que toca y se descarta
+    let cutter; try{ cutter=layerToTurf(e.layer); }catch(err){ cutter=null; }
+    map.removeLayer(e.layer);
+    let changed=0;
+    if(cutter) for(const z of getZones()){
+      let zt; try{ zt=layerToTurf(z); }catch(err){ continue; }
+      if(!turf.booleanIntersects(zt, cutter)) continue;
+      let diff;
+      try{ diff=turf.difference(turf.featureCollection([zt, cutter])); }
+      catch(err){ try{ diff=turf.difference(zt, cutter); }catch(e2){ continue; } }
+      map.removeLayer(z); addFeature(diff, z.feature.properties); changed++;
+    }
+    cutPending=false; currentMode=null; updateModeButtons();
+    updateCount(); pushHistory();
+    return;
+  }
+  setTarifa(e.layer, activeTarifa());
+  makeInteractive(e.layer);
+  updateCount(); pushHistory();
+  currentMode=null; updateModeButtons();   // al terminar de dibujar, vuelve a selección
+});
+// borrar (modo geoman) y recortar también entran al historial
+map.on("pm:remove", ()=>{ updateCount(); pushHistory(); });
+// (El recorte ahora se maneja en pm:create con cutPending + Turf, integrado al historial)
+
+// ---------- Botones de herramientas ----------
+// ---------- Gestor de modos (solo uno activo a la vez; siempre se puede volver a Seleccionar) ----------
+const modeButtons={draw:"btnDraw", edit:"btnEdit", drag:"btnDrag", cut:"btnCut", remove:"btnDel"};
+let currentMode=null;   // null = modo selección (clic normal)
+let cutPending=false;   // true mientras se dibuja la forma para recortar
+function disableAllModes(){
+  try{ map.pm.disableDraw(); }catch(e){}
+  if(map.pm.globalEditModeEnabled())    map.pm.disableGlobalEditMode();
+  if(map.pm.globalDragModeEnabled())    map.pm.disableGlobalDragMode();
+  if(map.pm.globalCutModeEnabled())     map.pm.disableGlobalCutMode();
+  if(map.pm.globalRemovalModeEnabled()) map.pm.disableGlobalRemovalMode();
+}
+function updateModeButtons(){
+  for(const [m,id] of Object.entries(modeButtons))
+    document.getElementById(id).classList.toggle("active", currentMode===m);
+  document.getElementById("btnSelect").classList.toggle("active", currentMode===null);
+}
+function setMode(mode){
+  disableAllModes();
+  cutPending=false;
+  currentMode = (mode===currentMode) ? null : mode;   // clic en el mismo botón = apagarlo
+  if(currentMode==="draw")        map.pm.enableDraw("Polygon");
+  else if(currentMode==="edit")   map.pm.enableGlobalEditMode();
+  else if(currentMode==="drag")   map.pm.enableGlobalDragMode();
+  else if(currentMode==="cut"){   cutPending=true; map.pm.enableDraw("Polygon"); } // recortar = dibujar molde
+  else if(currentMode==="remove") map.pm.enableGlobalRemovalMode();
+  updateModeButtons();
+}
+document.getElementById("btnSelect").onclick=()=> setMode(null);
+document.getElementById("btnDraw").onclick=()=> setMode("draw");
+document.getElementById("btnEdit").onclick=()=> setMode("edit");
+document.getElementById("btnDrag").onclick=()=> setMode("drag");
+document.getElementById("btnCut").onclick=()=> setMode("cut");
+document.getElementById("btnDel").onclick=()=> setMode("remove");
+updateModeButtons();
+
+// doble clic sobre cualquier zona = aplicarle la tarifa activa
+function makeInteractive(layer){
+  layer.on("dblclick", ()=>{ setTarifa(layer, activeTarifa()); pushHistory(); });
+  // clic = seleccionar (Shift+clic = agregar a la selección) — solo en modo selección
+  layer.on("click", e=>{
+    if(currentMode!==null) return;   // si hay un modo activo (editar/borrar/etc.), deja que Geoman lo maneje
+    L.DomEvent.stop(e); selectLayer(layer, e.originalEvent.shiftKey);
+  });
+  // cambios de geometría (editar vértices, mover, marcadores) -> historial
+  layer.on("pm:edit pm:update pm:dragend pm:markerdragend", ()=>{ if(!restoring) pushHistory(); });
+}
+
+// ---------- Selección de zonas ----------
+let selected=[];
+function highlight(layer){
+  layer.setStyle({...styleFromProps(layer.feature.properties), color:"#ffffff", weight:4, dashArray:"6 4"});
+  if(layer.bringToFront) layer.bringToFront();
+}
+function unhighlight(layer){ layer.setStyle(styleFromProps(layer.feature.properties)); }
+function clearSelection(){ selected.forEach(l=>{ if(map.hasLayer(l)) unhighlight(l); }); selected=[]; updateSelInfo(); }
+function selectLayer(layer, additive){
+  if(!additive){                                  // clic normal: limpia el resto
+    selected.forEach(l=>{ if(l!==layer && map.hasLayer(l)) unhighlight(l); });
+    selected=selected.filter(l=>l===layer);
+  }
+  const i=selected.indexOf(layer);
+  if(i>=0){ unhighlight(layer); selected.splice(i,1); }   // ya estaba -> deseleccionar
+  else { selected.push(layer); highlight(layer); }
+  updateSelInfo();
+}
+function updateSelInfo(){
+  const el=document.getElementById("selinfo");
+  if(!selected.length){ el.textContent="Nada seleccionado"; return; }
+  el.innerHTML="<b>"+selected.length+"</b> seleccionada(s)" +
+    (selected.length===1? " · «"+(selected[0].feature.properties.name||"sin nombre")+"»":"");
+}
+
+// convierte un polígono de Leaflet (con o sin huecos) a feature de Turf
+function layerToTurf(layer){
+  const rings=layer.getLatLngs().map(ring=>{
+    const c=ring.map(p=>[p.lng,p.lat]);
+    if(c.length && (c[0][0]!==c.at(-1)[0] || c[0][1]!==c.at(-1)[1])) c.push(c[0]); // cerrar anillo
+    return c;
+  });
+  return turf.polygon(rings);
+}
+// crea zona(s) en el mapa desde un feature de Turf (Polygon o MultiPolygon)
+function addFeature(feature, props){
+  if(!feature) return [];
+  const geom=feature.geometry||feature;
+  const polys = geom.type==="MultiPolygon"? geom.coordinates : [geom.coordinates];
+  const out=[];
+  for(const poly of polys){
+    const rings=poly.map(ring=>ring.map(([lng,lat])=>[lat,lng]));
+    const layer=L.polygon(rings, styleFromProps(props)).addTo(map);
+    layer.feature={type:"Feature",properties:{...props}};
+    bindPopup(layer); makeInteractive(layer); out.push(layer);
+  }
+  return out;
+}
+
+// ---------- Cargar KMZ/KML ----------
+document.getElementById("fileKmz").onchange=async ev=>{
+  const file=ev.target.files[0]; if(!file) return;
+  let kmlText;
+  if(file.name.toLowerCase().endsWith(".kmz")){
+    const zip=await JSZip.loadAsync(file);
+    const name=Object.keys(zip.files).find(n=>n.toLowerCase().endsWith(".kml"));
+    kmlText=await zip.files[name].async("string");
+  }else{
+    kmlText=await file.text();
+  }
+  loadKml(kmlText);
+};
+
+// color KML (aabbggrr) -> hex #rrggbb
+function kmlColorToHex(kml){
+  if(!kml) return null;
+  kml=kml.trim().replace(/^#/,"");
+  if(kml.length===8){ const bb=kml.slice(2,4),gg=kml.slice(4,6),rr=kml.slice(6,8); return ("#"+rr+gg+bb).toLowerCase(); }
+  if(kml.length===6){ return ("#"+kml).toLowerCase(); }
+  return null;
+}
+// mapa id-de-estilo -> color hex (incluye <Style> y <StyleMap>)
+function parseKmlStyles(xml){
+  const map={};
+  for(const st of xml.getElementsByTagName("Style")){
+    const id=st.getAttribute("id"); if(!id) continue;
+    const c=st.querySelector("PolyStyle color") || st.querySelector("LineStyle color");
+    const hex=kmlColorToHex(c?.textContent); if(hex) map[id]=hex;
+  }
+  for(const sm of xml.getElementsByTagName("StyleMap")){
+    const id=sm.getAttribute("id"); if(!id) continue;
+    let normalUrl=null;
+    for(const pair of sm.getElementsByTagName("Pair")){
+      if(pair.querySelector("key")?.textContent==="normal") normalUrl=pair.querySelector("styleUrl")?.textContent;
+    }
+    if(normalUrl){ const ref=normalUrl.replace(/^#/,""); if(map[ref]) map[id]=map[ref]; }
+  }
+  return map;
+}
+// color original de un Placemark: estilo en línea o referencia por styleUrl
+function placemarkColor(pm, styleMap){
+  const inline=Array.from(pm.children).find(c=>c.nodeName==="Style");
+  if(inline){
+    const c=inline.querySelector("PolyStyle color") || inline.querySelector("LineStyle color");
+    const hex=kmlColorToHex(c?.textContent); if(hex) return hex;
+  }
+  const su=Array.from(pm.children).find(c=>c.nodeName==="styleUrl");
+  if(su){ const ref=su.textContent.trim().replace(/^#/,""); if(styleMap[ref]) return styleMap[ref]; }
+  return null;
+}
+
+function loadKml(text){
+  const xml=new DOMParser().parseFromString(text,"text/xml");
+  const styleMap=parseKmlStyles(xml);
+  const pms=xml.getElementsByTagName("Placemark");
+  let added=0;
+  for(const pm of pms){
+    const coordsEl=pm.querySelector("Polygon coordinates");
+    if(!coordsEl) continue;
+    const name=(pm.querySelector("name")?.textContent||"").trim();
+    // inferir tarifa: del folder padre o del nombre
+    let folderName="";
+    let node=pm.parentNode;
+    while(node && node.nodeName!=="Folder") node=node.parentNode;
+    if(node){ folderName=node.querySelector("name")?.textContent||""; }
+    const tarifa=inferTarifa(folderName) || inferTarifa(name) || "15";
+    // color ORIGINAL del KMZ/KML (se conserva); si no trae color, usa el de la tarifa
+    const origHex=placemarkColor(pm, styleMap);
+    const color=origHex || (TARIFAS[tarifa]&&TARIFAS[tarifa].hex) || "#3388ff";
+    const latlngs=coordsEl.textContent.trim().split(/\s+/).map(t=>{
+      const [lon,lat]=t.split(",").map(Number); return [lat,lon];
+    });
+    const props={name:name||("Zona "+tarifa), tarifa, color, customColor:!!origHex};
+    const layer=L.polygon(latlngs, styleFromProps(props)).addTo(map);
+    layer.feature={type:"Feature",properties:props};
+    bindPopup(layer); makeInteractive(layer);
+    added++;
+  }
+  if(added){ map.fitBounds(L.featureGroup(getZones()).getBounds()); }
+  updateCount(); pushHistory();
+  alert(added+" zonas cargadas conservando sus colores originales. Clic en una zona para cambiar su nombre o color; doble clic le aplica la tarifa activa.");
+}
+
+function inferTarifa(s){
+  if(!s) return null;
+  const m=s.match(/\b(10|15|20|25|30)\b/);
+  return m? m[1]: null;
+}
+
+// ---------- Cargar límite de distrito (Nominatim / OpenStreetMap) ----------
+document.getElementById("btnDistrito").onclick=async ()=>{
+  const q=document.getElementById("distrito").value.trim();
+  if(!q) return;
+  const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q+", Lima, Perú")}&format=json&polygon_geojson=1&limit=1`;
+  try{
+    const r=await fetch(url,{headers:{"Accept-Language":"es"}});
+    const d=await r.json();
+    const g=d[0]?.geojson;
+    if(!g){ alert("No se encontró el distrito."); return; }
+    const t=activeTarifa();
+    const polys = g.type==="Polygon"? [g.coordinates] : g.coordinates; // normaliza
+    for(const poly of polys){
+      const latlngs=poly[0].map(([lon,lat])=>[lat,lon]);
+      const props={name:q+" (tarifa "+t+")", tarifa:t, color:(TARIFAS[t]&&TARIFAS[t].hex)||"#3388ff", customColor:false};
+      const layer=L.polygon(latlngs, styleFromProps(props)).addTo(map);
+      layer.feature={type:"Feature",properties:props};
+      bindPopup(layer); makeInteractive(layer);
+    }
+    map.fitBounds(L.featureGroup(getZones()).getBounds());
+    updateCount(); pushHistory();
+    alert("Contorno de "+q+" cargado con tarifa "+t+". Usa ✂️ Recortar o Editar vértices para cubrir solo la parte que quieras.");
+  }catch(e){ alert("Error al consultar el distrito: "+e.message); }
+};
+
+// ---------- Utilidades de capas ----------
+function getZones(){
+  const out=[];
+  map.eachLayer(l=>{ if(l instanceof L.Polygon && l.feature) out.push(l); });
+  return out;
+}
+function updateCount(){ document.getElementById("count").textContent=getZones().length+" zonas en el mapa"; }
+
+// ---------- Exportar ----------
+function hexToKml(hex, alpha){ // hex #RRGGBB -> KML aabbggrr
+  const r=hex.slice(1,3), g=hex.slice(3,5), b=hex.slice(5,7);
+  return alpha+b+g+r;
+}
+function buildKml(){
+  const groups={};
+  for(const l of getZones()){
+    const t=l.feature.properties.tarifa||"15";
+    (groups[t]=groups[t]||[]).push(l);
+  }
+  let styles="", folders="", sid=0;
+  for(const t of Object.keys(groups)){
+    let pms="";
+    for(const l of groups[t]){
+      const p=l.feature.properties;
+      const hex=colorOf(p);                       // color propio de la zona (conserva el original)
+      const styleId="s"+(sid++);
+      styles+=`<Style id="${styleId}"><LineStyle><color>${hexToKml(hex,"ff")}</color><width>2</width></LineStyle>`
+        +`<PolyStyle><color>${hexToKml(hex,"59")}</color></PolyStyle></Style>`;
+      const name=(p.name||"Zona "+t).replace(/[<&]/g,"");
+      const rings=l.getLatLngs();
+      const ringStr=r=>r.map(pt=>`${pt.lng},${pt.lat},0`).join(" ");
+      const outer=`<outerBoundaryIs><LinearRing><coordinates>${ringStr(rings[0])}</coordinates></LinearRing></outerBoundaryIs>`;
+      let inner="";
+      for(let i=1;i<rings.length;i++)
+        inner+=`<innerBoundaryIs><LinearRing><coordinates>${ringStr(rings[i])}</coordinates></LinearRing></innerBoundaryIs>`;
+      pms+=`<Placemark><name>${name}</name><styleUrl>#${styleId}</styleUrl>`
+        +`<Polygon>${outer}${inner}</Polygon></Placemark>`;
+    }
+    const label=(TARIFAS[t]&&TARIFAS[t].label) || ("Tarifa "+t);
+    folders+=`<Folder><name>${label.replace(/[<&]/g,"")}</name>${pms}</Folder>`;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document>`
+    +`<name>Cobertura GSG Corp</name>${styles}${folders}</Document></kml>`;
+}
+function download(blob, fname){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=fname; a.click();
+}
+document.getElementById("btnExport").onclick=async ()=>{
+  const kml=buildKml();
+  const zip=new JSZip(); zip.file("doc.kml", kml);
+  const blob=await zip.generateAsync({type:"blob"});
+  download(blob, "Cobertura_GSG_Corp.kmz");
+};
+document.getElementById("btnExportGeo").onclick=()=>{
+  const fc={type:"FeatureCollection",features:getZones().map(l=>{
+    const f=l.toGeoJSON(); f.properties=l.feature.properties; return f;
+  })};
+  download(new Blob([JSON.stringify(fc,null,2)],{type:"application/json"}), "cobertura.geojson");
+};
+
+// ---------- Capas y superposición ----------
+document.getElementById("btnFront").onclick=()=>{ if(selected[0]) selected[0].bringToFront(); };
+document.getElementById("btnBack").onclick=()=>{ if(selected[0]) selected[0].bringToBack(); };
+
+// la zona seleccionada (encima) recorta a todas las de abajo donde se solapan
+document.getElementById("btnSubtract").onclick=()=>{
+  if(selected.length!==1){ alert("Selecciona UNA sola zona (la de encima) para restarla de las de abajo."); return; }
+  const top=selected[0], topT=layerToTurf(top);
+  const others=getZones().filter(l=>l!==top);
+  let changed=0;
+  for(const z of others){
+    let zt;
+    try{ zt=layerToTurf(z); }catch(e){ continue; }
+    if(!turf.booleanIntersects(zt, topT)) continue;   // no se solapan -> no tocar
+    let diff;
+    try{ diff=turf.difference(turf.featureCollection([zt, topT])); }
+    catch(e){ try{ diff=turf.difference(zt, topT); }catch(e2){ continue; } }
+    map.removeLayer(z);
+    addFeature(diff, z.feature.properties);            // si diff es null, simplemente desaparece
+    changed++;
+  }
+  clearSelection(); updateCount(); pushHistory();
+  alert(changed? changed+" zona(s) de abajo recortadas." : "Esa zona no se solapa con ninguna otra.");
+};
+
+// une 2+ zonas seleccionadas en una sola (toma la tarifa de la primera)
+document.getElementById("btnUnion").onclick=()=>{
+  if(selected.length<2){ alert("Selecciona 2 o más zonas con Shift+clic para unirlas."); return; }
+  let acc=layerToTurf(selected[0]);
+  for(let i=1;i<selected.length;i++){
+    const t=layerToTurf(selected[i]);
+    try{ acc=turf.union(turf.featureCollection([acc,t])); }
+    catch(e){ try{ acc=turf.union(acc,t); }catch(e2){} }
+  }
+  const props={...selected[0].feature.properties};
+  selected.forEach(l=>map.removeLayer(l)); selected=[];
+  addFeature(acc, props);
+  updateSelInfo(); updateCount(); pushHistory();
+};
+
+// Resolver choques: donde se solapan, la tarifa MÁS BARATA se queda con la parte
+// compartida (+ margen opcional en metros); la zona más cara se recorta.
+function tarifaNum(props){ const n=parseFloat(props && props.tarifa); return isNaN(n)? Infinity : n; }
+document.getElementById("btnResolveClash").onclick=()=>{
+  let margin=parseFloat(document.getElementById("clashMargin").value);
+  if(isNaN(margin)||margin<0) margin=0;
+  // snapshot: geometría Turf original + tarifa numérica de cada zona
+  const items=getZones().map(l=>{
+    let t=null; try{ t=layerToTurf(l); }catch(e){}
+    return {layer:l, props:l.feature.properties, tar:tarifaNum(l.feature.properties), turf:t};
+  }).filter(x=>x.turf);
+  if(items.length<2){ alert("Necesitas al menos 2 zonas para resolver choques."); return; }
+
+  let changed=0;
+  if(margin>0){
+    // cada zona barata CRECE 'margin' m, pero SOLO hacia las zonas más caras que toca.
+    // La zona cara NUNCA se recorta: solo queda debajo de la barata crecida.
+    for(const z of items){
+      let exp=null;   // unión de las zonas MÁS CARAS pegadas a z
+      for(const o of items){
+        if(o===z || !(o.tar > z.tar)) continue;
+        if(!turf.booleanIntersects(o.turf, z.turf)) continue;
+        if(!exp) exp=o.turf;
+        else{ try{ exp=turf.union(turf.featureCollection([exp,o.turf])); }
+              catch(e){ try{ exp=turf.union(exp,o.turf); }catch(e2){} } }
+      }
+      if(!exp) continue;                                  // nada más caro al lado -> no crece
+      let ring=null; try{ ring=turf.buffer(z.turf, margin, {units:"meters"}); }catch(e){}
+      if(!ring) continue;
+      let growth=null;                                    // parte del crecimiento que cae sobre la zona cara
+      try{ growth=turf.intersect(turf.featureCollection([ring, exp])); }catch(e){}
+      if(!growth) continue;
+      let out=z.turf;
+      try{ out=turf.union(turf.featureCollection([z.turf, growth])) || z.turf; }
+      catch(e){ try{ out=turf.union(z.turf, growth)||z.turf; }catch(e2){} }
+      z.newTurf=out; z.willGrow=true; changed++;
+    }
+    for(const z of items){
+      if(!z.willGrow) continue;
+      map.removeLayer(z.layer);
+      const ls=addFeature(z.newTurf, z.props);            // reemplaza SOLO la barata; la cara intacta
+      z.layer=ls && ls[0];
+    }
+  }
+  // la tarifa más barata SIEMPRE encima -> su color/tarifa manda en el solape
+  getZones().slice()
+    .sort((a,b)=>tarifaNum(b.feature.properties)-tarifaNum(a.feature.properties))
+    .forEach(l=>l.bringToFront());
+  clearSelection(); updateCount(); pushHistory();
+  if(margin<=0){ alert("Listo: las zonas baratas quedaron al frente (su tarifa manda donde se solapan). Pon un margen en metros si quieres que además crezcan hacia la zona más cara."); return; }
+  if(!changed){ alert("No hay zonas baratas pegadas a una más cara dentro de ese margen."); return; }
+  alert("Listo: "+changed+" zona(s) barata(s) crecieron "+margin+" m hacia las más caras. Las zonas caras NO se recortaron.");
+};
+
+// ---------- Deshacer / Rehacer: botones + teclado ----------
+document.getElementById("btnUndo").onclick=undo;
+document.getElementById("btnRedo").onclick=redo;
+document.addEventListener("keydown", e=>{
+  const k=e.key.toLowerCase();
+  if(e.key==="Escape"){ setMode(null); clearSelection(); }
+  else if((e.ctrlKey||e.metaKey) && k==="z" && !e.shiftKey){
+    e.preventDefault();
+    if(currentMode==="draw"||currentMode==="cut") setMode(null); // mientras dibujas, Ctrl+Z cancela el dibujo en curso (no borra zonas)
+    else undo();
+  }
+  else if((e.ctrlKey||e.metaKey) && (k==="y" || (e.shiftKey && k==="z"))){ e.preventDefault(); redo(); }
+});
+
+// ---------- Calles para pegar bordes (snapping a vías reales de OpenStreetMap) ----------
+let streetsLayer=null;
+document.getElementById("btnStreets").onclick=async ()=>{
+  if(map.getZoom()<13){ alert("Acércate más con el zoom antes de cargar calles (un área muy grande trae demasiadas)."); return; }
+  const b=map.getBounds();
+  const bbox=`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+  const tipo=document.getElementById("streetType").value;
+  const hw = tipo==="main" ? '["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"]' : '["highway"]';
+  const q=`[out:json][timeout:30];(way${hw}(${bbox}););out geom;`;
+  const btn=document.getElementById("btnStreets"); const old=btn.textContent;
+  // varios servidores espejo: si uno está ocupado, prueba el siguiente
+  const endpoints=[
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+  ];
+  let d=null, lastErr="";
+  for(let i=0;i<endpoints.length;i++){
+    btn.textContent=`⏳ Cargando (${i+1}/${endpoints.length})...`;
+    try{
+      const r=await fetch(endpoints[i],{
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:"data="+encodeURIComponent(q)
+      });
+      if(!r.ok){ lastErr="HTTP "+r.status; continue; }
+      d=await r.json(); break;
+    }catch(err){ lastErr=err.message; }
+  }
+  btn.textContent=old;
+  if(!d){
+    alert("No se pudieron cargar las calles ("+lastErr+").\nLos servidores de OpenStreetMap pueden estar ocupados; espera unos segundos y reintenta.");
+    return;
+  }
+  if(streetsLayer) map.removeLayer(streetsLayer);
+  streetsLayer=L.layerGroup().addTo(map);
+  let n=0;
+  for(const el of d.elements){
+    if(el.type!=="way" || !el.geometry) continue;
+    const ll=el.geometry.map(g=>[g.lat,g.lon]);
+    const line=L.polyline(ll,{color:"#ff7800",weight:1.5,opacity:.65,interactive:false});
+    line.options.pmIgnore=false;          // que Geoman lo use para el snapping
+    streetsLayer.addLayer(line); n++;
+  }
+  if(!n){ alert("No se encontraron calles en esta vista. Acércate un poco más e inténtalo de nuevo."); return; }
+  alert(n+" calles cargadas. Al dibujar o ✂️ recortar, los vértices se pegan a las calles.");
+};
+document.getElementById("btnStreetsToggle").onclick=()=>{
+  if(!streetsLayer){ alert("Primero carga las calles."); return; }
+  if(map.hasLayer(streetsLayer)) map.removeLayer(streetsLayer); else streetsLayer.addTo(map);
+};
+
+// ---------- Recuperar trabajo guardado automáticamente ----------
+function loadSaved(){
+  let s=null; try{ s=localStorage.getItem("zonas_autosave"); }catch(e){}
+  return (s && s!=="[]") ? s : null;
+}
+document.getElementById("btnRecover").onclick=()=>{
+  const saved=loadSaved();
+  if(!saved){ alert("No hay trabajo guardado en este navegador."); return; }
+  restoreState(saved); pushHistory();
+};
+
+// estado inicial SIN sobrescribir el guardado (por si hay que recuperarlo)
+pushHistory(true);
+
+// al abrir, ofrecer recuperar el último trabajo
+(function(){
+  const saved=loadSaved(); if(!saved) return;
+  let ts=""; try{ ts=localStorage.getItem("zonas_autosave_ts")||""; }catch(e){}
+  if(confirm("Hay trabajo guardado automáticamente"+(ts?" del "+ts:"")+".\n¿Quieres recuperarlo?")){
+    restoreState(saved); pushHistory();
+  }
+})();
+</script>
+</body>
+</html>
