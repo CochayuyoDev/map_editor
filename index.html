@@ -102,6 +102,16 @@
     </div>
 
     <div class="blk">
+      <h2>📍 Buscar coordenadas</h2>
+      <input type="text" id="coordInput" placeholder="Ej: -12.0464, -77.0428">
+      <div class="row">
+        <button class="sec" id="btnGoCoord">📍 Marcar punto</button>
+        <button class="sec" id="btnClearCoord">✖️ Quitar puntito</button>
+      </div>
+      <div class="hint">Pega o escribe <b>lat, lng</b> (separadas por coma) y aparece un puntito en esa ubicación. No es una zona: solo una marca para ubicarte. "Quitar puntito" lo borra.</div>
+    </div>
+
+    <div class="blk">
       <h2>🛣️ Calles (pegar bordes)</h2>
       <select id="streetType">
         <option value="all">Todas las calles</option>
@@ -456,6 +466,14 @@ function updateSelInfo(){
     (selected.length===1? " · «"+(selected[0].feature.properties.name||"sin nombre")+"»":"");
 }
 
+// elegir una tarifa en el desplegable mientras hay zonas seleccionadas = cambiarles la tarifa
+selTarifa.addEventListener("change", ()=>{
+  if(!selected.length) return;        // sin selección: solo fija la tarifa activa para dibujar
+  const t=activeTarifa();
+  selected.forEach(l=>{ setTarifa(l, t); highlight(l); });  // re-resalta: setTarifa repinta el estilo
+  updateSelInfo(); pushHistory();
+});
+
 // convierte un polígono de Leaflet (con o sin huecos) a feature de Turf
 function layerToTurf(layer){
   const rings=layer.getLatLngs().map(ring=>{
@@ -594,6 +612,31 @@ document.getElementById("btnDistrito").onclick=async ()=>{
     alert("Contorno de "+q+" cargado con tarifa "+t+". Usa ✂️ Recortar o Editar vértices para cubrir solo la parte que quieras.");
   }catch(e){ alert("Error al consultar el distrito: "+e.message); }
 };
+
+// ---------- Buscar coordenadas (puntito de referencia, NO es una zona) ----------
+let coordMarker=null;
+function clearCoordMarker(){
+  if(coordMarker){ map.removeLayer(coordMarker); coordMarker=null; }
+}
+function parseLatLng(s){
+  if(!s) return null;
+  // acepta "lat, lng", "lat lng" y pega-desde-Google "(lat, lng)"
+  const nums=s.replace(/[()]/g," ").split(/[,\s]+/).map(x=>parseFloat(x)).filter(x=>!isNaN(x));
+  if(nums.length<2) return null;
+  const [lat,lng]=nums;
+  if(lat<-90||lat>90||lng<-180||lng>180) return null;
+  return [lat,lng];
+}
+document.getElementById("btnGoCoord").onclick=()=>{
+  const ll=parseLatLng(document.getElementById("coordInput").value.trim());
+  if(!ll){ alert("Coordenadas no válidas. Escribe latitud y longitud, ej: -12.0464, -77.0428"); return; }
+  clearCoordMarker();                                  // solo un puntito a la vez
+  coordMarker=L.circleMarker(ll,{radius:6,color:"#fff",weight:2,fillColor:"#ff2d55",fillOpacity:1,interactive:true})
+    .addTo(map);
+  coordMarker.bindPopup(`📍 ${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}`);
+  map.setView(ll, Math.max(map.getZoom(),15));
+};
+document.getElementById("btnClearCoord").onclick=clearCoordMarker;
 
 // ---------- Utilidades de capas ----------
 function getZones(){
